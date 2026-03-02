@@ -11,11 +11,6 @@ This project demonstrates a complete data analysis workflow:
     6. SQL QUERYING         → Demonstrate SQL skills via sqlite3
     7. INSIGHTS & SUMMARY   → Key takeaways printed at the end
 
-WHY THIS STRUCTURE MATTERS:
-Real-world data science is 80% cleaning and exploring, 20% modeling.
-Interviewers want to see that you can wrangle messy data, ask the right
-questions, and communicate findings clearly — which is exactly what
-this script does.
 """
 
 # ─────────────────────────────────────────────────────────────────────
@@ -39,7 +34,6 @@ import matplotlib.ticker as mticker
 import seaborn as sns
 import sqlite3
 
-# Apply a clean, professional look to every plot that follows.
 sns.set_style("whitegrid")
 sns.set_context("notebook", font_scale=1.1)
 plt.rcParams["figure.dpi"] = 120
@@ -68,12 +62,7 @@ def load_data(filepath: str) -> pd.DataFrame:
 # CONNECTION: Cleaning feeds directly into Feature Engineering and EDA.
 # If we skip this, aggregations and plots will silently break or lie
 # (e.g., "₹1,299" is a string — you can't compute its mean).
-#
-# WHAT CHANGED FROM YOUR ORIGINAL CODE:
-# • Wrapped in a function so it's reusable and testable.
-# • Added duplicate removal — duplicates inflate counts and skew averages.
-# • Added missing-value reporting so you know what was dropped/imputed.
-# • Used .pipe() chaining for readability (a pandas best practice).
+
 
 def clean_currency(series: pd.Series) -> pd.Series:
     """Strip ₹ and commas, then convert to float."""
@@ -88,7 +77,7 @@ def clean_currency(series: pd.Series) -> pd.Series:
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     """Clean types, drop duplicates, and report missing values."""
 
-    df = df.copy()  # never mutate the original — a defensive best practice
+    df = df.copy()  
 
     # --- Currency columns ---------------------------------------------------
     df["discounted_price"] = clean_currency(df["discounted_price"])
@@ -103,7 +92,6 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # --- Discount percentage (originally missing from cleaned columns) ------
-    # Strip the trailing '%' if present, then convert.
     if df["discount_percentage"].dtype == object:
         df["discount_percentage"] = (
             df["discount_percentage"]
@@ -138,18 +126,12 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 # CONNECTION: New columns give us richer questions to explore in EDA.
 # These features also translate directly into model inputs if you later
 # add a predictive component (e.g., "predict rating from price features").
-#
-# WHAT'S NEW vs. your original:
-# • price_tier — bins products into budget/mid/premium (great for groupby)
-# • main_category — extracts the top-level from nested category strings
-# • savings_amount — absolute rupee savings (complements percentage)
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     """Create derived columns that add analytical value."""
 
     df = df.copy()
 
-    # Calculated discount — your original, kept as-is (it's correct!)
     df["calculated_discount_pct"] = (
         (df["actual_price"] - df["discounted_price"])
         / df["actual_price"] * 100
@@ -178,7 +160,6 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 # 5. EXPLORATORY DATA ANALYSIS (EDA)
 # ─────────────────────────────────────────────────────────────────────
 # CONNECTION: EDA is where you turn cleaned data into understanding.
-# Every insight here could become a slide in your interview presentation.
 
 def run_eda(df: pd.DataFrame) -> dict:
     """Print key statistics and return a dict of summary results."""
@@ -237,12 +218,7 @@ def run_eda(df: pd.DataFrame) -> dict:
 # ─────────────────────────────────────────────────────────────────────
 # CONNECTION: Charts are the "show, don't tell" layer.  Each one maps
 # directly to an insight from the EDA section above.
-#
-# IMPROVEMENTS OVER YOUR ORIGINAL:
-# • Subplots in a single figure → cleaner, easier to compare
-# • Consistent color palette throughout
-# • Proper axis labels, annotations, and formatting
-# • Saved to PNG for easy inclusion in a portfolio / README
+
 
 PALETTE = sns.color_palette("viridis", 10)
 
@@ -340,14 +316,8 @@ def plot_correlation_heatmap(insights: dict):
 # ─────────────────────────────────────────────────────────────────────
 # 7. SQL QUERIES
 # ─────────────────────────────────────────────────────────────────────
-# CONNECTION: Many data science roles require SQL. By storing the
-# cleaned DataFrame in SQLite and querying it, you demonstrate that
-# you can move fluidly between pandas and SQL — a huge plus in interviews.
-#
-# IMPROVEMENTS:
-# • Parameterised function so you can swap queries easily
-# • Added a window-function query (shows advanced SQL knowledge)
-# • Results printed with context, not just raw tables
+# CONNECTION: Many data science roles require SQL, as it is essential for querying, 
+# managing, and analyzing data stored in relational databases.
 
 def run_sql_analysis(df: pd.DataFrame):
     """Load data into SQLite, run analytical queries, and return results."""
@@ -359,7 +329,7 @@ def run_sql_analysis(df: pd.DataFrame):
     print("=" * 60)
 
     queries = {
-        # Query 1 — Category popularity (your original, polished)
+        # Query 1 — Category popularity 
         "Most Popular Categories (by total reviews)": """
             SELECT
                 main_category                    AS category,
@@ -427,8 +397,6 @@ def run_sql_analysis(df: pd.DataFrame):
 # ─────────────────────────────────────────────────────────────────────
 # 8. INSIGHTS SUMMARY
 # ─────────────────────────────────────────────────────────────────────
-# CONNECTION: This is the "so what?" — the part interviewers care
-# about most.  Numbers mean nothing without interpretation.
 
 def print_insights(df: pd.DataFrame, insights: dict):
     """Summarise the key takeaways in plain language."""
