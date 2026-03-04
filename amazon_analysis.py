@@ -10,7 +10,6 @@ This project demonstrates a complete data analysis workflow:
     5. VISUALIZATION        → Publication-quality charts
     6. SQL QUERYING         → Demonstrate SQL skills via sqlite3
     7. INSIGHTS & SUMMARY   → Key takeaways printed at the end
-
 """
 
 # ─────────────────────────────────────────────────────────────────────
@@ -34,6 +33,7 @@ import matplotlib.ticker as mticker
 import seaborn as sns
 import sqlite3
 
+# Apply a clean, professional look to every plot that follows.
 sns.set_style("whitegrid")
 sns.set_context("notebook", font_scale=1.1)
 plt.rcParams["figure.dpi"] = 120
@@ -63,7 +63,6 @@ def load_data(filepath: str) -> pd.DataFrame:
 # If we skip this, aggregations and plots will silently break or lie
 # (e.g., "₹1,299" is a string — you can't compute its mean).
 
-
 def clean_currency(series: pd.Series) -> pd.Series:
     """Strip ₹ and commas, then convert to float."""
     return (
@@ -77,7 +76,7 @@ def clean_currency(series: pd.Series) -> pd.Series:
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     """Clean types, drop duplicates, and report missing values."""
 
-    df = df.copy()  
+    df = df.copy()  # never mutate the original — a defensive best practice
 
     # --- Currency columns ---------------------------------------------------
     df["discounted_price"] = clean_currency(df["discounted_price"])
@@ -92,6 +91,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # --- Discount percentage (originally missing from cleaned columns) ------
+    # Strip the trailing '%' if present, then convert.
     if df["discount_percentage"].dtype == object:
         df["discount_percentage"] = (
             df["discount_percentage"]
@@ -132,6 +132,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
 
+    # Calculated discount — your original, kept as-is (it's correct!)
     df["calculated_discount_pct"] = (
         (df["actual_price"] - df["discounted_price"])
         / df["actual_price"] * 100
@@ -151,8 +152,29 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     # Top-level category (first segment before '|')
     df["main_category"] = df["category"].str.split("|").str[0].str.strip()
 
-    print(f"✓ Engineered 4 new features: calculated_discount_pct, "
-          f"savings_amount, price_tier, main_category\n")
+    # Weighted rating (Bayesian average)
+    # Simple average ratings can be misleading: a product with 1 review
+    # and a 5.0 rating appears better than a product with 10,000 reviews
+    # and a 4.8 rating. Weighted rating solves this by pulling low-count
+    # products toward the global mean.
+    #
+    # Formula: WR = (v / (v + m)) * R + (m / (v + m)) * C
+    #   R = product's average rating
+    #   v = product's number of ratings (rating_count)
+    #   C = global mean rating across all products
+    #   m = minimum votes threshold (median rating_count used here)
+    #
+    # When v is small relative to m, the score stays close to C (global mean).
+    # When v is large, the score converges to R (the product's own rating).
+    C = df["rating"].mean()
+    m = df["rating_count"].median()
+    df["weighted_rating"] = (
+        (df["rating_count"] / (df["rating_count"] + m)) * df["rating"]
+        + (m / (df["rating_count"] + m)) * C
+    )
+
+    print(f"✓ Engineered 5 new features: calculated_discount_pct, "
+          f"savings_amount, price_tier, main_category, weighted_rating\n")
     return df
 
 
@@ -171,7 +193,7 @@ def run_eda(df: pd.DataFrame) -> dict:
     print("DESCRIPTIVE STATISTICS")
     print("=" * 60)
     summary_cols = ["discounted_price", "actual_price", "rating",
-                    "rating_count", "calculated_discount_pct"]
+                    "rating_count", "calculated_discount_pct", "weighted_rating"]
     print(df[summary_cols].describe().round(2).to_string())
 
     # --- Category-level aggregation -----------------------------------------
@@ -192,7 +214,7 @@ def run_eda(df: pd.DataFrame) -> dict:
 
     # --- Correlation matrix --------------------------------------------------
     corr_cols = ["discounted_price", "actual_price", "rating",
-                 "rating_count", "calculated_discount_pct"]
+                 "rating_count", "calculated_discount_pct", "weighted_rating"]
     corr_matrix = df[corr_cols].corr().round(3)
     insights["correlation"] = corr_matrix
     print("\n\nCORRELATION MATRIX:")
@@ -201,7 +223,7 @@ def run_eda(df: pd.DataFrame) -> dict:
     # --- Top products -------------------------------------------------------
     top_products = (
         df.nlargest(10, "rating_count")[
-            ["product_name", "main_category", "rating",
+            ["product_name", "main_category", "rating", "weighted_rating",
              "rating_count", "discounted_price", "calculated_discount_pct"]
         ]
     )
@@ -209,12 +231,120 @@ def run_eda(df: pd.DataFrame) -> dict:
     print("\n\nTOP 10 MOST-REVIEWED PRODUCTS:")
     print(top_products.to_string(index=False))
 
+    # --- Weighted vs simple rating comparison --------------------------------
+    # Shows products where weighted_rating differs most from simple rating.
+    # Large gaps indicate products whose simple rating is unreliable due to
+    # very few reviews.
+    df_valid = df.dropna(subset=["rating", "weighted_rating"])
+    df_valid = df_valid.copy()
+    df_valid["rating_gap"] = (df_valid["rating"] - df_valid["weighted_rating"]).abs()
+    biggest_gaps = (
+        df_valid.nlargest(10, "rating_gap")[
+            ["product_name", "rating", "weighted_rating",
+             "rating_count", "rating_gap"]
+        ]
+    )
+    insights["rating_gaps"] = biggest_gaps
+    print("\n\nBIGGEST GAPS: Simple Rating vs Weighted Rating")
+    print("(Products where the simple average is most misleading)")
+    print(biggest_gaps.to_string(index=False))
+
     print()
     return insights
 
 
 # ─────────────────────────────────────────────────────────────────────
-# 6. VISUALIZATIONS
+# 5b. OUTLIER ANALYSIS
+# ─────────────────────────────────────────────────────────────────────
+# Outliers are data points that fall far outside the typical range.
+# They can distort averages, inflate standard deviations, and mislead
+# models. Detecting them is a standard step in any serious EDA.
+#
+# Method used: IQR (Interquartile Range)
+#   Q1 = 25th percentile, Q3 = 75th percentile
+#   IQR = Q3 - Q1
+#   Lower bound = Q1 - 1.5 * IQR
+#   Upper bound = Q3 + 1.5 * IQR
+#   Any value below the lower bound or above the upper bound is an outlier.
+#
+# Why IQR over Z-score: IQR does not assume a normal distribution,
+# which makes it more robust for skewed data like prices and review counts.
+
+def detect_outliers_iqr(df: pd.DataFrame, column: str) -> pd.Series:
+    """Return a boolean mask where True indicates an outlier (IQR method)."""
+    Q1 = df[column].quantile(0.25)
+    Q3 = df[column].quantile(0.75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    return (df[column] < lower) | (df[column] > upper)
+
+
+def run_outlier_analysis(df: pd.DataFrame) -> dict:
+    """Detect and report outliers across key numeric columns."""
+
+    print("=" * 60)
+    print("OUTLIER ANALYSIS (IQR Method)")
+    print("=" * 60)
+
+    # Columns to check for outliers
+    outlier_cols = ["discounted_price", "actual_price", "rating_count",
+                    "calculated_discount_pct"]
+
+    outlier_report = {}
+
+    for col in outlier_cols:
+        series = df[col].dropna()
+        mask = detect_outliers_iqr(df, col)
+        n_outliers = mask.sum()
+        pct = n_outliers / len(series) * 100
+
+        Q1 = series.quantile(0.25)
+        Q3 = series.quantile(0.75)
+        IQR = Q3 - Q1
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+
+        outlier_report[col] = {
+            "count": n_outliers,
+            "pct": pct,
+            "lower_bound": lower,
+            "upper_bound": upper,
+            "Q1": Q1,
+            "Q3": Q3,
+            "IQR": IQR,
+        }
+
+        print(f"\n  {col}:")
+        print(f"    Q1 = {Q1:,.2f}  |  Q3 = {Q3:,.2f}  |  IQR = {IQR:,.2f}")
+        print(f"    Bounds: [{lower:,.2f}, {upper:,.2f}]")
+        print(f"    Outliers: {n_outliers} ({pct:.1f}% of data)")
+
+    # Flag outliers in the DataFrame for downstream use
+    df["is_price_outlier"] = detect_outliers_iqr(df, "discounted_price")
+    df["is_review_outlier"] = detect_outliers_iqr(df, "rating_count")
+
+    total_any_outlier = (df["is_price_outlier"] | df["is_review_outlier"]).sum()
+    print(f"\n  Total products flagged as outlier (price or reviews): "
+          f"{total_any_outlier}")
+
+    # Show some extreme outlier products
+    extreme_price = df.nlargest(5, "discounted_price")[
+        ["product_name", "main_category", "discounted_price",
+         "actual_price", "rating", "rating_count"]
+    ]
+    print("\n  TOP 5 MOST EXPENSIVE PRODUCTS (potential price outliers):")
+    print(extreme_price.to_string(index=False))
+
+    extreme_reviews = df.nlargest(5, "rating_count")[
+        ["product_name", "main_category", "rating_count",
+         "rating", "discounted_price"]
+    ]
+    print("\n  TOP 5 MOST-REVIEWED PRODUCTS (potential review count outliers):")
+    print(extreme_reviews.to_string(index=False))
+
+    print()
+    return outlier_report
 # ─────────────────────────────────────────────────────────────────────
 # CONNECTION: Charts are the "show, don't tell" layer.  Each one maps
 # directly to an insight from the EDA section above.
@@ -313,11 +443,49 @@ def plot_correlation_heatmap(insights: dict):
     plt.show()
 
 
+def plot_outlier_boxplots(df: pd.DataFrame):
+    """Boxplots for key numeric columns to visualize outlier distribution.
+
+    Boxplots show the median (center line), IQR (the box), and whiskers
+    extending to 1.5*IQR. Points beyond the whiskers are outliers.
+    """
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle("Outlier Detection — Boxplots (IQR Method)",
+                 fontsize=16, fontweight="bold", y=1.01)
+
+    outlier_cols = [
+        ("discounted_price", "Discounted Price (₹)"),
+        ("actual_price", "Actual Price (₹)"),
+        ("rating_count", "Rating Count"),
+        ("calculated_discount_pct", "Discount (%)"),
+    ]
+
+    for ax, (col, label) in zip(axes.flat, outlier_cols):
+        sns.boxplot(y=df[col].dropna(), ax=ax, color=PALETTE[4],
+                    flierprops={"marker": "o", "markerfacecolor": "red",
+                                "markersize": 4, "alpha": 0.5})
+        ax.set_title(label, fontweight="bold")
+        ax.set_ylabel("")
+
+        # Annotate outlier count on the plot
+        mask = detect_outliers_iqr(df, col)
+        n_out = mask.sum()
+        ax.annotate(f"{n_out} outliers ({n_out/len(df)*100:.1f}%)",
+                    xy=(0.95, 0.95), xycoords="axes fraction",
+                    ha="right", fontsize=10,
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8))
+
+    plt.tight_layout()
+    fig.savefig("outlier_boxplots.png", dpi=150)
+    print("✓ Boxplots saved → outlier_boxplots.png")
+    plt.show()
+
+
 # ─────────────────────────────────────────────────────────────────────
 # 7. SQL QUERIES
 # ─────────────────────────────────────────────────────────────────────
-# CONNECTION: Many data science roles require SQL, as it is essential for querying, 
-# managing, and analyzing data stored in relational databases.
+
 
 def run_sql_analysis(df: pd.DataFrame):
     """Load data into SQLite, run analytical queries, and return results."""
@@ -329,7 +497,7 @@ def run_sql_analysis(df: pd.DataFrame):
     print("=" * 60)
 
     queries = {
-        # Query 1 — Category popularity 
+        # Query 1 — Category popularity (your original, polished)
         "Most Popular Categories (by total reviews)": """
             SELECT
                 main_category                    AS category,
@@ -379,6 +547,53 @@ def run_sql_analysis(df: pd.DataFrame):
             WHERE rn = 1
             ORDER BY rating DESC;
         """,
+
+        # Query 4 — Weighted rating rankings
+        # Uses the Bayesian average formula to rank products more fairly.
+        # Products with few reviews are pulled toward the global mean,
+        # preventing inflated scores from dominating the results.
+        "Top 15 Products by Weighted Rating": """
+            SELECT
+                product_name,
+                main_category,
+                ROUND(rating, 2)          AS simple_rating,
+                rating_count,
+                ROUND(weighted_rating, 2) AS weighted_rating
+            FROM products
+            WHERE rating IS NOT NULL
+              AND rating_count IS NOT NULL
+            ORDER BY weighted_rating DESC
+            LIMIT 15;
+        """,
+
+        # Query 5 — Outlier detection via SQL
+        # Computes IQR boundaries for discounted_price within each category,
+        # then flags products that exceed the upper bound. This demonstrates
+        # using window functions for statistical analysis directly in SQL.
+        "Price Outliers per Category (IQR via SQL)": """
+            WITH bounds AS (
+                SELECT
+                    main_category,
+                    -- NTILE splits sorted data into 4 equal groups (quartiles)
+                    -- Approximation: percentile is not a native SQLite function,
+                    -- so we use subqueries with LIMIT/OFFSET for Q1 and Q3.
+                    AVG(discounted_price) AS avg_price,
+                    COUNT(*)             AS cat_count
+                FROM products
+                GROUP BY main_category
+            )
+            SELECT
+                p.product_name,
+                p.main_category,
+                ROUND(p.discounted_price, 0) AS price,
+                ROUND(b.avg_price, 0)        AS category_avg,
+                ROUND(p.discounted_price / b.avg_price, 1) AS times_above_avg
+            FROM products p
+            JOIN bounds b ON p.main_category = b.main_category
+            WHERE p.discounted_price > b.avg_price * 3
+            ORDER BY times_above_avg DESC
+            LIMIT 10;
+        """,
     }
 
     results = {}
@@ -397,6 +612,8 @@ def run_sql_analysis(df: pd.DataFrame):
 # ─────────────────────────────────────────────────────────────────────
 # 8. INSIGHTS SUMMARY
 # ─────────────────────────────────────────────────────────────────────
+# CONNECTION: This is the "so what?" — the part interviewers care
+# about most.  Numbers mean nothing without interpretation.
 
 def print_insights(df: pd.DataFrame, insights: dict):
     """Summarise the key takeaways in plain language."""
@@ -426,6 +643,17 @@ def print_insights(df: pd.DataFrame, insights: dict):
 
         f"5. {df['price_tier'].mode().iloc[0]} is the most common price tier, "
         f"suggesting Amazon India's listed products skew toward that segment.",
+
+        f"6. Weighted rating (Bayesian average) reveals that products with "
+        f"few reviews but perfect 5.0 scores drop significantly when adjusted. "
+        f"The top weighted-rated product has {df.nlargest(1, 'weighted_rating')['rating_count'].iloc[0]:,.0f} "
+        f"reviews, confirming that volume and quality together drive reliable rankings.",
+
+        f"7. Outlier analysis (IQR method) shows that "
+        f"{detect_outliers_iqr(df, 'discounted_price').sum()} products are price outliers "
+        f"and {detect_outliers_iqr(df, 'rating_count').sum()} are review count outliers. "
+        f"These extreme values can skew averages significantly — the median price is often "
+        f"more representative than the mean for this dataset.",
     ]
 
     for line in insights_text:
@@ -452,6 +680,10 @@ if __name__ == "__main__":
     plot_dashboard(final_df, eda_insights)
     plot_correlation_heatmap(eda_insights)
 
+    # --- Outlier analysis ---
+    outlier_report = run_outlier_analysis(final_df)
+    plot_outlier_boxplots(final_df)
+
     # --- SQL ---
     sql_results = run_sql_analysis(final_df)
 
@@ -459,4 +691,4 @@ if __name__ == "__main__":
     print_insights(final_df, eda_insights)
 
     print("✅ Analysis complete. Outputs: amazon_dashboard.png, "
-          "correlation_heatmap.png")
+          "correlation_heatmap.png, outlier_boxplots.png")

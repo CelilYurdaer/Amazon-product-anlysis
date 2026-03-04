@@ -12,6 +12,8 @@ Online marketplaces use complex pricing and discounting strategies. This project
 - **Which categories offer the deepest discounts — and why?**
 - **What separates the most-reviewed products from the rest?**
 - **Where are the "best value" products hiding?**
+- **Are simple star ratings trustworthy, or do low-review products game the system?**
+- **Which products are statistical outliers in price or popularity?**
 
 ## Key Findings
 
@@ -22,10 +24,14 @@ Online marketplaces use complex pricing and discounting strategies. This project
 | **Most-reviewed category** | Electronics dominates in total review volume |
 | **Price distribution** | Products skew toward the budget segment (<₹500) |
 | **Best value sweet spot** | Products with 50%+ discount AND 4★+ rating exist across multiple categories |
+| **Weighted rating** | Bayesian average reveals that 5.0-rated products with few reviews are misleadingly ranked — high volume + high quality = truly top products |
+| **Outliers** | IQR method flags significant price and review count outliers; median is more representative than mean for this dataset |
 
 ## Dashboard Preview
 
-> *Run the script to generate `amazon_dashboard.png` — a 2×2 grid covering:*
+> *Run the script to generate three chart images:*
+
+**`amazon_dashboard.png`** — 2×2 grid:
 
 | Top-left | Top-right |
 |----------|-----------|
@@ -34,6 +40,10 @@ Online marketplaces use complex pricing and discounting strategies. This project
 | Bottom-left | Bottom-right |
 |-------------|--------------|
 | Rating distribution with mean line | Product count & avg rating by price tier |
+
+**`outlier_boxplots.png`** — 2×2 grid showing IQR-based outlier detection for discounted price, actual price, rating count, and discount percentage. Red dots indicate outliers beyond the 1.5×IQR whiskers.
+
+**`correlation_heatmap.png`** — Full feature correlation matrix including weighted rating.
 
 ## Tools & Technologies
 
@@ -51,6 +61,7 @@ amazon-product-analysis/
 ├── amazon_analysis.py      # Main analysis script (full pipeline)
 ├── amazon.csv              # Raw dataset
 ├── amazon_dashboard.png    # Generated 2×2 chart dashboard
+├── outlier_boxplots.png    # Outlier detection boxplots
 ├── correlation_heatmap.png # Feature correlation matrix
 └── README.md               # This file
 ```
@@ -73,33 +84,36 @@ amazon-product-analysis/
    python amazon_analysis.py
    ```
 
-   This will print the full EDA and SQL results to the console and save two chart images to the project folder.
+   This will print the full EDA, outlier analysis, and SQL results to the console and save three chart images to the project folder.
 
 ## Analysis Pipeline
 
 The script follows a structured data science workflow:
 
 ```
-Load CSV → Clean Data → Engineer Features → EDA → Visualize → SQL Analysis → Insights
+Load CSV → Clean Data → Engineer Features → EDA → Outlier Analysis → Visualize → SQL Analysis → Insights
 ```
 
 **Step-by-step:**
 
 1. **Data Loading** — Read the raw Amazon product CSV
 2. **Data Cleaning** — Convert currency strings to numbers, handle missing values, remove duplicates
-3. **Feature Engineering** — Create `calculated_discount_pct`, `savings_amount`, `price_tier`, and `main_category`
-4. **Exploratory Analysis** — Descriptive statistics, correlation analysis, category-level aggregations
-5. **Visualization** — 2×2 dashboard and correlation heatmap saved as PNG
-6. **SQL Queries** — Category popularity, best-value filtering, and a window function ranking products within categories
-7. **Insights Summary** — Plain-language takeaways from the data
+3. **Feature Engineering** — Create `calculated_discount_pct`, `savings_amount`, `price_tier`, `main_category`, and `weighted_rating` (Bayesian average that penalizes low-review-count products)
+4. **Exploratory Analysis** — Descriptive statistics, correlation analysis, category-level aggregations, weighted vs. simple rating comparison
+5. **Outlier Detection** — IQR-based analysis flagging extreme values in price and review count, with detailed per-column reporting
+6. **Visualization** — Main dashboard, correlation heatmap, and outlier boxplots saved as PNG
+7. **SQL Queries** — Category popularity, best-value filtering, window function rankings, weighted rating leaderboard, and category-level price outlier detection
+8. **Insights Summary** — Plain-language takeaways from the data
 
 ## SQL Highlights
 
-The project demonstrates SQL proficiency through three analytical queries:
+The project demonstrates SQL proficiency through five analytical queries:
 
 - **Aggregation** — `GROUP BY` with `AVG`, `SUM`, `COUNT` to rank categories
 - **Multi-condition filtering** — `WHERE` clause combining discount %, rating, and review thresholds
 - **Window functions** — `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` to find the top-rated product in each category
+- **Weighted ranking** — Querying Bayesian-averaged ratings to compare simple vs. weighted product rankings
+- **Outlier detection** — `JOIN` with category-level averages to flag products priced 3× above their category mean
 
 ## Dataset
 
