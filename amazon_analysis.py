@@ -294,13 +294,13 @@ def run_outlier_analysis(df: pd.DataFrame) -> dict:
     outlier_report = {}
 
     for col in outlier_cols:
-        series = df[col].dropna()
         mask = detect_outliers_iqr(df, col)
-        n_outliers = mask.sum()
-        pct = n_outliers / len(series) * 100
+        valid_mask = df[col].notna()
+        n_outliers = mask[valid_mask].sum()
+        pct = n_outliers / valid_mask.sum() * 100
 
-        Q1 = series.quantile(0.25)
-        Q3 = series.quantile(0.75)
+        Q1 = df[col].quantile(0.25)
+        Q3 = df[col].quantile(0.75)
         IQR = Q3 - Q1
         lower = Q1 - 1.5 * IQR
         upper = Q3 + 1.5 * IQR
@@ -486,7 +486,6 @@ def plot_outlier_boxplots(df: pd.DataFrame):
 # 7. SQL QUERIES
 # ─────────────────────────────────────────────────────────────────────
 
-
 def run_sql_analysis(df: pd.DataFrame):
     """Load data into SQLite, run analytical queries, and return results."""
 
@@ -566,32 +565,58 @@ def run_sql_analysis(df: pd.DataFrame):
             LIMIT 15;
         """,
 
-        # Query 5 — Outlier detection via SQL
-        # Computes IQR boundaries for discounted_price within each category,
-        # then flags products that exceed the upper bound. This demonstrates
-        # using window functions for statistical analysis directly in SQL.
+        # Query 5 — Outlier detection via SQL (IQR method)
+        # SQLite does not have a native PERCENTILE function, so Q1 and Q3
+        # are approximated using subqueries that pick the value at the 25th
+        # and 75th percentile positions. The IQR and bounds are then computed
+        # the same way as the Python detect_outliers_iqr function above.
         "Price Outliers per Category (IQR via SQL)": """
-            WITH bounds AS (
+            WITH quartiles AS (
                 SELECT
                     main_category,
-                    -- NTILE splits sorted data into 4 equal groups (quartiles)
-                    -- Approximation: percentile is not a native SQLite function,
-                    -- so we use subqueries with LIMIT/OFFSET for Q1 and Q3.
-                    AVG(discounted_price) AS avg_price,
-                    COUNT(*)             AS cat_count
-                FROM products
+                    COUNT(*) AS cnt,
+                    -- Q1: value at the 25th percentile position
+                    (SELECT p2.discounted_price
+                     FROM products p2
+                     WHERE p2.main_category = p1.main_category
+                       AND p2.discounted_price IS NOT NULL
+                     ORDER BY p2.discounted_price
+                     LIMIT 1 OFFSET (COUNT(*) / 4)
+                    ) AS Q1,
+                    -- Q3: value at the 75th percentile position
+                    (SELECT p3.discounted_price
+                     FROM products p3
+                     WHERE p3.main_category = p1.main_category
+                       AND p3.discounted_price IS NOT NULL
+                     ORDER BY p3.discounted_price
+                     LIMIT 1 OFFSET (COUNT(*) * 3 / 4)
+                    ) AS Q3
+                FROM products p1
+                WHERE discounted_price IS NOT NULL
                 GROUP BY main_category
+                HAVING COUNT(*) >= 5
+            ),
+            bounds AS (
+                SELECT
+                    main_category,
+                    Q1,
+                    Q3,
+                    (Q3 - Q1) AS IQR,
+                    Q1 - 1.5 * (Q3 - Q1) AS lower_bound,
+                    Q3 + 1.5 * (Q3 - Q1) AS upper_bound
+                FROM quartiles
             )
             SELECT
                 p.product_name,
                 p.main_category,
-                ROUND(p.discounted_price, 0) AS price,
-                ROUND(b.avg_price, 0)        AS category_avg,
-                ROUND(p.discounted_price / b.avg_price, 1) AS times_above_avg
+                ROUND(p.discounted_price, 0)  AS price,
+                ROUND(b.Q1, 0)                AS Q1,
+                ROUND(b.Q3, 0)                AS Q3,
+                ROUND(b.upper_bound, 0)       AS upper_bound
             FROM products p
             JOIN bounds b ON p.main_category = b.main_category
-            WHERE p.discounted_price > b.avg_price * 3
-            ORDER BY times_above_avg DESC
+            WHERE p.discounted_price > b.upper_bound
+            ORDER BY p.discounted_price DESC
             LIMIT 10;
         """,
     }
@@ -612,8 +637,7 @@ def run_sql_analysis(df: pd.DataFrame):
 # ─────────────────────────────────────────────────────────────────────
 # 8. INSIGHTS SUMMARY
 # ─────────────────────────────────────────────────────────────────────
-# CONNECTION: This is the "so what?" — the part interviewers care
-# about most.  Numbers mean nothing without interpretation.
+
 
 def print_insights(df: pd.DataFrame, insights: dict):
     """Summarise the key takeaways in plain language."""
