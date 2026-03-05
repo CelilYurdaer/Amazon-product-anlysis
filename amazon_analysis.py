@@ -132,10 +132,14 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.copy()
 
-    # Calculated discount — your original, kept as-is (it's correct!)
-    df["calculated_discount_pct"] = (
-        (df["actual_price"] - df["discounted_price"])
-        / df["actual_price"] * 100
+    # Calculated discount percentage
+    # np.where prevents division by zero when actual_price is 0.
+    # If actual_price is 0 or negative, the result is set to NaN
+    # instead of raising an error or producing infinity.
+    df["calculated_discount_pct"] = np.where(
+        df["actual_price"] > 0,
+        (df["actual_price"] - df["discounted_price"]) / df["actual_price"] * 100,
+        np.nan
     )
 
     # Absolute savings in ₹
@@ -166,12 +170,26 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     #
     # When v is small relative to m, the score stays close to C (global mean).
     # When v is large, the score converges to R (the product's own rating).
-    C = df["rating"].mean()
-    m = df["rating_count"].median()
-    df["weighted_rating"] = (
+    #
+    # NaN handling: rows missing rating or rating_count are excluded from
+    # the global mean (C) and median (m) calculations, and their
+    # weighted_rating is set to NaN. Imputing with median would create
+    # fake data — a product with no reviews has no meaningful rating
+    # to fill in, so NaN is the honest representation.
+    valid = df["rating"].notna() & df["rating_count"].notna()
+    C = df.loc[valid, "rating"].mean()
+    m = df.loc[valid, "rating_count"].median()
+    df["weighted_rating"] = np.where(
+        valid,
         (df["rating_count"] / (df["rating_count"] + m)) * df["rating"]
-        + (m / (df["rating_count"] + m)) * C
+        + (m / (df["rating_count"] + m)) * C,
+        np.nan
     )
+
+    n_dropped = (~valid).sum()
+    if n_dropped:
+        print(f"  ⚠ {n_dropped} product(s) have no rating/rating_count "
+              f"→ weighted_rating set to NaN")
 
     print(f"✓ Engineered 5 new features: calculated_discount_pct, "
           f"savings_amount, price_tier, main_category, weighted_rating\n")
@@ -215,10 +233,21 @@ def run_eda(df: pd.DataFrame) -> dict:
     # --- Correlation matrix --------------------------------------------------
     corr_cols = ["discounted_price", "actual_price", "rating",
                  "rating_count", "calculated_discount_pct", "weighted_rating"]
-    corr_matrix = df[corr_cols].corr().round(3)
-    insights["correlation"] = corr_matrix
-    print("\n\nCORRELATION MATRIX:")
-    print(corr_matrix.to_string())
+
+    # Pearson: measures linear relationships between variables.
+    # Works best when data is normally distributed.
+    corr_pearson = df[corr_cols].corr().round(3)
+    insights["correlation"] = corr_pearson
+    print("\n\nCORRELATION MATRIX (Pearson — linear relationships):")
+    print(corr_pearson.to_string())
+
+    # Spearman: measures monotonic relationships (not just linear).
+    # More robust for skewed distributions like price and rating_count,
+    # because it operates on rank order rather than raw values.
+    corr_spearman = df[corr_cols].corr(method="spearman").round(3)
+    insights["correlation_spearman"] = corr_spearman
+    print("\n\nCORRELATION MATRIX (Spearman — rank-based relationships):")
+    print(corr_spearman.to_string())
 
     # --- Top products -------------------------------------------------------
     top_products = (
@@ -349,7 +378,6 @@ def run_outlier_analysis(df: pd.DataFrame) -> dict:
 # CONNECTION: Charts are the "show, don't tell" layer.  Each one maps
 # directly to an insight from the EDA section above.
 
-
 PALETTE = sns.color_palette("viridis", 10)
 
 
@@ -429,14 +457,25 @@ def plot_dashboard(df: pd.DataFrame, insights: dict):
 
 
 def plot_correlation_heatmap(insights: dict):
-    """Dedicated heatmap for the correlation matrix."""
-    fig, ax = plt.subplots(figsize=(8, 6))
+    """Side-by-side heatmaps for Pearson and Spearman correlation."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7))
+
     sns.heatmap(
         insights["correlation"], annot=True, fmt=".2f",
-        cmap="RdBu_r", center=0, square=True, ax=ax,
+        cmap="RdBu_r", center=0, square=True, ax=ax1,
         linewidths=0.5, cbar_kws={"shrink": 0.8}
     )
-    ax.set_title("Feature Correlation Matrix", fontsize=14, fontweight="bold")
+    ax1.set_title("Pearson (Linear)", fontsize=14, fontweight="bold")
+
+    sns.heatmap(
+        insights["correlation_spearman"], annot=True, fmt=".2f",
+        cmap="RdBu_r", center=0, square=True, ax=ax2,
+        linewidths=0.5, cbar_kws={"shrink": 0.8}
+    )
+    ax2.set_title("Spearman (Rank-based)", fontsize=14, fontweight="bold")
+
+    fig.suptitle("Feature Correlation Matrices", fontsize=16,
+                 fontweight="bold", y=1.02)
     plt.tight_layout()
     fig.savefig("correlation_heatmap.png", dpi=150)
     print("✓ Heatmap saved → correlation_heatmap.png")
@@ -637,7 +676,6 @@ def run_sql_analysis(df: pd.DataFrame):
 # ─────────────────────────────────────────────────────────────────────
 # 8. INSIGHTS SUMMARY
 # ─────────────────────────────────────────────────────────────────────
-
 
 def print_insights(df: pd.DataFrame, insights: dict):
     """Summarise the key takeaways in plain language."""
