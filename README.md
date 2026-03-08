@@ -70,7 +70,7 @@ amazon-product-analysis/
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/YOUR-USERNAME/amazon-product-analysis.git
+   git clone https://github.com/CelilYurdaer/amazon-product-analysis.git
    cd amazon-product-analysis
    ```
 
